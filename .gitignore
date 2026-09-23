@@ -1,0 +1,30 @@
+# .NET / MAUI build output
+[Bb]in/
+[Oo]bj/
+TestResults/
+artifacts/
+
+# Android packages and local publish output
+*.apk
+*.aab
+*.apks
+publish/
+
+# IDE and user-specific settings
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local SDK and signing configuration
+local.properties
+*.keystore
+*.jks
+*.pfx
+
+# OS files
+.DS_Store
+Thumbs.db
