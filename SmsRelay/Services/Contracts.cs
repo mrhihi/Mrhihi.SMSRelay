@@ -5,15 +5,17 @@ namespace SmsRelay.Services;
 public interface ISettingsService
 {
     Task<RelaySettings> GetAsync();
-    Task SaveAsync(RelaySettings settings, string? gotifyToken);
-    Task<string?> GetTokenAsync();
-    Task<bool> IsSmsAllowedAsync(string sender, string body);
+    Task SaveAsync(RelaySettings settings, IReadOnlyDictionary<Guid, string>? tokenValues = null);
+    Task<string?> GetTokenAsync(Guid tokenId);
+    Task<IReadOnlyList<GotifyDestination>> GetDestinationsAsync();
+    Task<IReadOnlyList<DeliveryTarget>> GetTargetsAsync(IEnumerable<Guid> tokenIds);
+    Task<IReadOnlyList<DeliveryTarget>> GetAutomaticTargetsAsync(string sender, string body);
 }
 
 public interface IQueueService
 {
-    Task<bool> EnqueueIncomingAsync(string sender, string body, DateTimeOffset receivedAt);
-    Task EnqueueManualAsync(IEnumerable<SmsRecord> messages);
+    Task<bool> EnqueueIncomingAsync(string sender, string body, DateTimeOffset receivedAt, IEnumerable<DeliveryTarget> targets);
+    Task EnqueueManualAsync(IEnumerable<SmsRecord> messages, IEnumerable<DeliveryTarget> targets);
     Task<IReadOnlyList<QueueItem>> GetAsync();
     Task RemoveAsync(Guid id);
     Task ClearAllAsync();
@@ -25,7 +27,7 @@ public interface IQueueService
 public interface IGotifyClient
 {
     Task SendAsync(QueueItem item, CancellationToken cancellationToken);
-    Task TestAsync(CancellationToken cancellationToken);
+    Task TestAsync(DeliveryTarget target, CancellationToken cancellationToken);
 }
 
 public interface IQueueProcessor { Task ProcessAsync(CancellationToken cancellationToken = default); }

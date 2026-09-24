@@ -2,7 +2,7 @@ using SmsRelay.Models;
 
 namespace SmsRelay.Services;
 
-public sealed class QueueProcessor(IQueueService queue, IGotifyClient gotify) : IQueueProcessor
+public sealed class QueueProcessor(IQueueService queue, IGotifyClient gotify, ISettingsService settings) : IQueueProcessor
 {
     public async Task ProcessAsync(CancellationToken cancellationToken = default)
     {
@@ -10,11 +10,20 @@ public sealed class QueueProcessor(IQueueService queue, IGotifyClient gotify) : 
         {
             try
             {
+                // Queue records created before multi-destination support have no target snapshot.
+                if (item.Target is null)
+                {
+                    var fallback = (await settings.GetDestinationsAsync()).FirstOrDefault();
+                    if (fallback is null) throw new InvalidOperationException("請先設定 Gotify 目的地。");
+                    item.Target = (await settings.GetTargetsAsync([fallback.TokenId])).FirstOrDefault()
+                        ?? throw new InvalidOperationException("舊傳送紀錄的 Gotify Token 已不存在。");
+                }
                 item.Status = DeliveryStatus.Sending;
                 await queue.UpdateAsync(item);
                 await gotify.SendAsync(item, cancellationToken);
                 item.Status = DeliveryStatus.Sent;
                 item.Body = string.Empty; // successful history deliberately does not retain SMS content
+                if (item.Target is not null) item.Target = item.Target with { Token = string.Empty };
                 item.LastError = null;
                 item.NextAttemptAt = null;
             }

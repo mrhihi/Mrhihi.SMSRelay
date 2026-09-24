@@ -7,74 +7,59 @@ namespace SmsRelay.Pages;
 
 public sealed class DashboardPage : ContentPage
 {
-    private readonly IQueueService _queue;
-    private readonly Label _permission = new();
-    private readonly Label _summary = new();
-    private readonly Button _permissionAction = new() { Text = "授權讀取與接收 SMS" };
-    private readonly Button _clearAll = new() { Text = "全部清除" };
-    private readonly VerticalStackLayout _recent = new() { Spacing = 8 };
-
-    public DashboardPage(IQueueService queue)
+    private readonly IQueueService _queue; private readonly ISettingsService _settings;
+    private readonly Label _permission = new(); private readonly Label _summary = new(); private readonly Button _permissionAction = Ui.IconButton("⚠", "授權 SMS 權限"); private readonly VerticalStackLayout _recent = new() { Spacing = 8 }; private readonly VerticalStackLayout _setup = new() { Spacing = 1 };
+    public DashboardPage(IQueueService queue, ISettingsService settings)
     {
-        _queue = queue; Title = "SMS Relay";
-        _permissionAction.Clicked += async (_, _) => await RequestSmsAsync();
-        var refresh = new Button { Text = "重新整理" }; refresh.Clicked += async (_, _) => await RefreshAsync();
-        _clearAll.Clicked += async (_, _) => await ClearAllAsync();
-        var recentHeader = new Grid { ColumnDefinitions = new ColumnDefinitionCollection { new(GridLength.Star), new(GridLength.Auto) } };
-        var recentTitle = new Label { Text = "最近傳送紀錄", FontAttributes = FontAttributes.Bold, VerticalOptions = LayoutOptions.Center };
-        recentHeader.Add(recentTitle); recentHeader.Add(_clearAll); Grid.SetColumn(_clearAll, 1);
-        Content = new ScrollView { Content = new VerticalStackLayout { Padding = 20, Spacing = 14, Children = { new Label { Text = "SMS → Gotify", FontSize = 28, FontAttributes = FontAttributes.Bold }, new Label { Text = "僅會自動轉發符合來源規則的新簡訊。" }, _permission, _permissionAction, _summary, refresh, recentHeader, _recent } } };
+        _queue = queue; _settings = settings; Title = "狀態"; _permissionAction.Clicked += async (_, _) => await RequestSmsAsync();
+        var clear = Ui.SmallAction("⋯"); clear.Clicked += async (_, _) => await ClearAllAsync();
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitionCollection { new(GridLength.Star), new(GridLength.Auto) } }; header.Add(Ui.Title("最近傳送紀錄", 20)); header.Add(clear); Grid.SetColumn(clear, 1);
+        Content = new RefreshView { Content = new ScrollView { Content = new VerticalStackLayout { Padding = new Thickness(16, 14, 16, 28), Spacing = 16, Children = { Ui.Title("SMS Relay", 28), _setup, Ui.Card(new VerticalStackLayout { Spacing = 8, Children = { _permission, _permissionAction, _summary } }), header, _recent } } } };
+        ((RefreshView)Content).Refreshing += async (_, _) => { await RefreshAsync(); ((RefreshView)Content).IsRefreshing = false; };
         Appearing += async (_, _) => await RefreshAsync();
+        TabSwipe.Attach((View)Content);
     }
-
-    private Task RequestSmsAsync()
-    {
-        var activity = Platform.CurrentActivity;
-        activity?.RequestPermissions([Android.Manifest.Permission.ReceiveSms, Android.Manifest.Permission.ReadSms], 101);
-        return Task.CompletedTask;
-    }
-
+    private Task RequestSmsAsync() { Platform.CurrentActivity?.RequestPermissions([Android.Manifest.Permission.ReceiveSms, Android.Manifest.Permission.ReadSms], 101); return Task.CompletedTask; }
     private async Task RefreshAsync()
     {
-        var context = Android.App.Application.Context;
-        var receive = context.CheckSelfPermission(Android.Manifest.Permission.ReceiveSms) == Permission.Granted;
-        var read = context.CheckSelfPermission(Android.Manifest.Permission.ReadSms) == Permission.Granted;
-        _permission.Text = $"SMS 權限：接收 {(receive ? "已授權" : "未授權")}／讀取 {(read ? "已授權" : "未授權")}";
-        _permission.TextColor = receive && read ? Color.FromArgb("#4ADE80") : Color.FromArgb("#FBBF24");
-        _permissionAction.IsVisible = !receive || !read;
-        var all = await _queue.GetAsync();
-        _clearAll.IsVisible = all.Count > 0;
-        _summary.Text = $"待送 {all.Count(x => x.Status == DeliveryStatus.Pending)}  · 失敗 {all.Count(x => x.Status == DeliveryStatus.Failed)}  · 已送 {all.Count(x => x.Status == DeliveryStatus.Sent)}";
+        var context = Android.App.Application.Context; var receive = context.CheckSelfPermission(Android.Manifest.Permission.ReceiveSms) == Permission.Granted; var read = context.CheckSelfPermission(Android.Manifest.Permission.ReadSms) == Permission.Granted;
+        _permission.Text = receive && read ? "SMS 權限已授權" : "SMS 權限尚未完成"; _permission.TextColor = receive && read ? Color.FromArgb("#188038") : Color.FromArgb("#C26A00"); _permissionAction.IsVisible = !receive || !read;
+        var settings = await _settings.GetAsync(); BuildSetup(receive && read, settings);
+        var all = await _queue.GetAsync(); _summary.Text = $"待送 {all.Count(x => x.Status == DeliveryStatus.Pending)} · 失敗 {all.Count(x => x.Status == DeliveryStatus.Failed)} · 已送 {all.Count(x => x.Status == DeliveryStatus.Sent)}";
         _recent.Children.Clear();
-        foreach (var item in all.Take(20))
-        {
-            var retry = new Button { Text = "重送", IsVisible = item.Status == DeliveryStatus.Failed };
-            retry.Clicked += async (_, _) => { await _queue.RetryAsync(item.Id); await RefreshAsync(); };
-            var clear = new Button
-            {
-                Text = "×", WidthRequest = 38, HeightRequest = 38, Padding = 0,
-                BackgroundColor = Colors.Transparent, TextColor = Color.FromArgb("#F87171"), FontSize = 24
-            };
-            clear.Clicked += async (_, _) => { await _queue.RemoveAsync(item.Id); await RefreshAsync(); };
-            var title = new Label { Text = $"{item.Status} · {item.Sender} · {item.ReceivedAt.LocalDateTime:g}", TextColor = Colors.White, VerticalOptions = LayoutOptions.Center };
-            var header = new Grid { ColumnDefinitions = new ColumnDefinitionCollection { new(GridLength.Star), new(GridLength.Auto) } };
-            header.Add(title); header.Add(clear); Grid.SetColumn(clear, 1);
-            _recent.Children.Add(new Frame
-            {
-                BackgroundColor = Color.FromArgb("#1E293B"), BorderColor = Color.FromArgb("#334155"), Padding = 12, CornerRadius = 10,
-                Content = new VerticalStackLayout { Children =
-                {
-                    header,
-                    new Label { Text = item.Status == DeliveryStatus.Sent ? "已成功轉發（本文已清除）" : (item.LastError ?? item.Body), TextColor = Color.FromArgb("#CBD5E1"), LineBreakMode = LineBreakMode.TailTruncation },
-                    retry
-                } }
-            });
-        }
+        foreach (var group in all.GroupBy(x => x.MessageGroupId).OrderByDescending(x => x.Max(item => item.ReceivedAt)).Take(20)) _recent.Children.Add(BuildMessageRow(group.ToList()));
+        if (all.Count == 0) _recent.Children.Add(Ui.Card(new VerticalStackLayout { Padding = 16, Children = { Ui.Title("尚無傳送紀錄"), Ui.Secondary("符合規則的新 SMS 或手動選取的簡訊會顯示在這裡。") } }));
     }
-    private async Task ClearAllAsync()
+    private void BuildSetup(bool permission, RelaySettings settings)
     {
-        if (!await DisplayAlert("清除所有紀錄", "待送、失敗與成功紀錄都會從本機刪除。確定要繼續嗎？", "全部清除", "取消")) return;
-        await _queue.ClearAllAsync();
-        await RefreshAsync();
+        _setup.Children.Clear(); var validGroup = settings.RuleGroups.Any(x => x.IsEnabled && x.Clauses.Any(c => c.Rules.Count > 0) && x.TargetTokenIds.Count > 0); var ready = permission && settings.Servers.SelectMany(x => x.Tokens).Any() && validGroup;
+        if (ready) return;
+        _setup.Children.Add(Ui.Title("完成設定", 20));
+        _setup.Children.Add(Ui.Card(new VerticalStackLayout { Spacing = 8, Children = { Step(permission, "SMS 權限"), Step(settings.Servers.SelectMany(x => x.Tokens).Any(), "Gotify Server 與 Token"), Step(validGroup, "自動轉發規則") } }));
+    }
+    private static View Step(bool complete, string text) => new HorizontalStackLayout { Spacing = 8, Children = { new Label { Text = complete ? "✓" : "○", TextColor = complete ? Color.FromArgb("#188038") : Color.FromArgb("#C26A00"), FontSize = 18 }, Ui.Themed(new Label { Text = text, VerticalOptions = LayoutOptions.Center }) } };
+    private View BuildMessageRow(List<QueueItem> items)
+    {
+        var sample = items[0]; var sent = items.Count(x => x.Status == DeliveryStatus.Sent); var failed = items.Count(x => x.Status == DeliveryStatus.Failed); var pending = items.Count - sent - failed;
+        var state = failed > 0 ? (sent > 0 ? "部分失敗" : "傳送失敗") : pending > 0 ? "處理中" : "已完成";
+        var color = failed > 0 ? "#C62828" : pending > 0 ? "#C26A00" : "#188038";
+        var title = new Grid { ColumnDefinitions = new ColumnDefinitionCollection { new(GridLength.Star), new(GridLength.Auto) } }; title.Add(Ui.Themed(new Label { Text = sample.Sender, FontAttributes = FontAttributes.Bold })); var badge = new Label { Text = state, TextColor = Color.FromArgb(color), FontSize = 13 }; title.Add(badge); Grid.SetColumn(badge, 1);
+        var card = Ui.Card(new VerticalStackLayout { Spacing = 4, Children = { title, Ui.Secondary($"{sample.ReceivedAt.LocalDateTime:g} · {(sample.IsManualImport ? "手動" : "自動")}"), Ui.Secondary($"{items.Count} 個目的地 · {sent} 成功 · {failed} 失敗" + (pending > 0 ? $" · {pending} 待送" : "")) } });
+        card.GestureRecognizers.Add(new TapGestureRecognizer { Command = new Command(async () => await Navigation.PushAsync(new DeliveryDetailPage(_queue, items.First().MessageGroupId))) }); return card;
+    }
+    private async Task ClearAllAsync() { if (await DisplayAlert("清除所有紀錄", "待送、失敗與成功紀錄都會從本機刪除。", "全部清除", "取消")) { await _queue.ClearAllAsync(); await RefreshAsync(); } }
+}
+
+public sealed class DeliveryDetailPage : ContentPage
+{
+    private readonly IQueueService _queue; private readonly Guid _groupId; private readonly VerticalStackLayout _rows = new() { Spacing = 8 };
+    public DeliveryDetailPage(IQueueService queue, Guid groupId) { _queue = queue; _groupId = groupId; Title = "傳送詳情"; Content = new ScrollView { Content = new VerticalStackLayout { Padding = 16, Spacing = 12, Children = { Ui.Title("投遞目的地", 24), _rows } } }; Appearing += async (_, _) => await LoadAsync(); }
+    private async Task LoadAsync()
+    {
+        _rows.Children.Clear(); var items = (await _queue.GetAsync()).Where(x => x.MessageGroupId == _groupId).ToList(); foreach (var item in items)
+        {
+            var retry = Ui.SmallAction("重送"); retry.IsVisible = item.Status == DeliveryStatus.Failed; retry.Clicked += async (_, _) => { await _queue.RetryAsync(item.Id); await LoadAsync(); };
+            _rows.Children.Add(Ui.Card(new VerticalStackLayout { Spacing = 4, Children = { Ui.Title(item.Target is null ? "未指定目的地" : $"{item.Target.ServerName}／{item.Target.TokenName}"), Ui.Secondary(item.Status.ToString()), Ui.Secondary(item.LastError ?? (item.Status == DeliveryStatus.Sent ? "已成功轉發" : "等待傳送")), retry } }));
+        }
     }
 }

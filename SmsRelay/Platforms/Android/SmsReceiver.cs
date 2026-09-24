@@ -21,8 +21,9 @@ public sealed class SmsReceiver : BroadcastReceiver
                 var sender = messages[0]?.OriginatingAddress ?? "未知來源";
                 var text = string.Concat(messages.Where(x => x is not null).Select(x => x!.MessageBody));
                 var at = DateTimeOffset.FromUnixTimeMilliseconds(messages[0]?.TimestampMillis ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                if (await ServiceRegistry.Get<ISettingsService>().IsSmsAllowedAsync(sender, text))
-                    await ServiceRegistry.Get<IQueueService>().EnqueueIncomingAsync(sender, text, at);
+                var settings = ServiceRegistry.Get<ISettingsService>();
+                var targets = await settings.GetAutomaticTargetsAsync(sender, text);
+                await ServiceRegistry.Get<IQueueService>().EnqueueIncomingAsync(sender, text, at, targets);
             }
             catch (Exception ex) { global::Android.Util.Log.Warn("SmsRelay", $"Unable to process incoming SMS: {ex.Message}"); }
             finally { pending.Finish(); }
