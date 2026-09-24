@@ -49,6 +49,8 @@ public sealed class RelaySettings
 
 public sealed record GotifyDestination(Guid ServerId, Guid TokenId, string ServerName, string TokenName);
 public sealed record DeliveryTarget(Guid ServerId, Guid TokenId, string ServerName, string TokenName, string BaseUrl, string Token, int Priority);
+public sealed record RuleMatchedMessage(SmsRecord Message, IReadOnlyList<DeliveryTarget> Targets);
+public sealed record ManualDelivery(SmsRecord Message, IReadOnlyList<DeliveryTarget> Targets);
 
 public sealed class QueueItem
 {

@@ -10,12 +10,14 @@ public interface ISettingsService
     Task<IReadOnlyList<GotifyDestination>> GetDestinationsAsync();
     Task<IReadOnlyList<DeliveryTarget>> GetTargetsAsync(IEnumerable<Guid> tokenIds);
     Task<IReadOnlyList<DeliveryTarget>> GetAutomaticTargetsAsync(string sender, string body);
+    Task<IReadOnlyList<RuleMatchedMessage>> GetRuleMatchedMessagesAsync(IEnumerable<SmsRecord> messages, IEnumerable<Guid> ruleGroupIds);
 }
 
 public interface IQueueService
 {
     Task<bool> EnqueueIncomingAsync(string sender, string body, DateTimeOffset receivedAt, IEnumerable<DeliveryTarget> targets);
     Task EnqueueManualAsync(IEnumerable<SmsRecord> messages, IEnumerable<DeliveryTarget> targets);
+    Task EnqueueManualAsync(IEnumerable<ManualDelivery> deliveries);
     Task<IReadOnlyList<QueueItem>> GetAsync();
     Task RemoveAsync(Guid id);
     Task ClearAllAsync();

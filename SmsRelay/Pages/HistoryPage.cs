@@ -20,7 +20,8 @@ public sealed class HistoryPage : ContentPage
     private readonly VerticalStackLayout _dateConditions = new() { Spacing = 8 };
     private readonly Button _loadMore = Ui.IconButton("↓", "載入更多簡訊");
     private readonly Button _selectToggle = Ui.LabeledIconButton("☑", "選取");
-    private readonly Button _send = Ui.IconButton("➤", "轉發已選取項目");
+    private readonly Button _send = Ui.LabeledIconButton("➤", "發送已選取項目");
+    private readonly Button _sendByRules = Ui.LabeledIconButton("➤", "依規則測試發送");
     private bool _selectionMode;
     private int _resultCount;
     private int _offset;
@@ -31,11 +32,19 @@ public sealed class HistoryPage : ContentPage
         _history = history; _queue = queue; _settings = settings; Title = "歷史簡訊";
         var find = Ui.LabeledIconButton("⌕", "套用搜尋"); find.Clicked += async (_, _) => await LoadAsync();
         _send.Clicked += async (_, _) => await SendSelectedAsync();
+        _sendByRules.Clicked += async (_, _) => await SendSelectedByRulesAsync();
         _selectToggle.Clicked += (_, _) => { _selectionMode = !_selectionMode; _selected.Clear(); UpdateSelection(); _selectToggle.Text = _selectionMode ? "×  取消" : "☑  選取"; SemanticProperties.SetDescription(_selectToggle, _selectionMode ? "取消選取" : "選取簡訊"); _ = LoadAsync(); };
         var previous = Ui.IconButton("‹", "上一個有簡訊的日期"); previous.Clicked += async (_, _) => await MoveDateAsync(-1);
         var next = Ui.IconButton("›", "下一個有簡訊的日期"); next.Clicked += async (_, _) => await MoveDateAsync(1);
         _date.DateSelected += async (_, _) => await LoadAsync();
-        _advancedToggle.Clicked += async (_, _) => { _advancedSearch.IsVisible = !_advancedSearch.IsVisible; _dateConditions.IsVisible = !_advancedSearch.IsVisible; UpdateAdvancedToggle(); await LoadAsync(); };
+        _advancedToggle.Clicked += async (_, _) =>
+        {
+            _advancedSearch.IsVisible = !_advancedSearch.IsVisible;
+            _dateConditions.IsVisible = !_advancedSearch.IsVisible;
+            if (!_advancedSearch.IsVisible) _search.Text = string.Empty;
+            UpdateAdvancedToggle();
+            await LoadAsync();
+        };
         _advancedSearch.Children.Add(_search);
         _advancedSearch.Children.Add(find);
         _loadMore.Clicked += async (_, _) => await LoadMoreAsync();
@@ -78,7 +87,8 @@ public sealed class HistoryPage : ContentPage
         layout.Add(header);
         layout.Add(scroll);
         Grid.SetRow(scroll, 1);
-        layout.Add(_send); Grid.SetRow(_send, 2);
+        var sendActions = new HorizontalStackLayout { Spacing = 8, Children = { _send, _sendByRules } };
+        layout.Add(sendActions); Grid.SetRow(sendActions, 2);
         Content = layout;
         Appearing += async (_, _) => await LoadAsync();
         TabSwipe.Attach(layout);
@@ -124,6 +134,7 @@ public sealed class HistoryPage : ContentPage
     {
         _selection.Text = _selectionMode ? $"已選取 {_selected.Count} 則" : $"讀取到 {_resultCount} 則";
         _send.IsVisible = _selectionMode; _send.IsEnabled = _selected.Count > 0; SemanticProperties.SetDescription(_send, _selected.Count == 0 ? "選擇要轉發的簡訊" : $"轉發 {_selected.Count} 則簡訊");
+        _sendByRules.IsVisible = _selectionMode; _sendByRules.IsEnabled = _selected.Count > 0; SemanticProperties.SetDescription(_sendByRules, _selected.Count == 0 ? "選擇要依規則測試的簡訊" : $"依規則測試 {_selected.Count} 則簡訊");
     }
     private void UpdateAdvancedToggle()
     {
@@ -144,14 +155,36 @@ public sealed class HistoryPage : ContentPage
         if (_selected.Count == 0) return;
         var destinations = await _settings.GetDestinationsAsync();
         if (destinations.Count == 0) { await DisplayAlert("沒有目的地", "請先在設定新增 Gotify Server 與 Token。", "確定"); return; }
+        // Returning from the modal makes this page appear and reload, which clears _selected.
+        // Keep the user's selection independent of that lifecycle refresh.
+        var messages = _selected.Values.ToList();
         var picker = new DestinationPickerPage(destinations);
         await Navigation.PushModalAsync(new NavigationPage(picker));
         var selected = await picker.Selection;
         if (selected is null) return;
         var targets = await _settings.GetTargetsAsync(selected);
         if (targets.Count == 0) { await DisplayAlert("沒有可用 Token", "所選 Token 缺少設定值。", "確定"); return; }
-        await _queue.EnqueueManualAsync(_selected.Values, targets);
-        await DisplayAlert("已加入佇列", $"{_selected.Count} 則 SMS 將送至 {targets.Count} 個 Token。", "確定");
+        await _queue.EnqueueManualAsync(messages, targets);
+        await DisplayAlert("已加入佇列", $"{messages.Count} 則 SMS 將送至 {targets.Count} 個 Token。", "確定");
+        _selectionMode = false; _selectToggle.Text = "☑  選取";
+        await LoadAsync();
+    }
+
+    private async Task SendSelectedByRulesAsync()
+    {
+        if (_selected.Count == 0) return;
+        var messages = _selected.Values.ToList();
+        var groups = (await _settings.GetAsync()).RuleGroups.Where(group => group.IsEnabled).ToList();
+        if (groups.Count == 0) { await DisplayAlert("沒有啟用的規則群組", "請先在設定新增並啟用至少一個規則群組。", "確定"); return; }
+        var picker = new RuleGroupPickerPage(groups);
+        await Navigation.PushModalAsync(new NavigationPage(picker));
+        var selected = await picker.Selection;
+        if (selected is null) return;
+        var matches = await _settings.GetRuleMatchedMessagesAsync(messages, selected);
+        var deliveries = matches.Where(match => match.Targets.Count > 0).Select(match => new ManualDelivery(match.Message, match.Targets)).ToList();
+        if (deliveries.Count > 0) await _queue.EnqueueManualAsync(deliveries);
+        var queuedItems = deliveries.Sum(delivery => delivery.Targets.Select(target => target.TokenId).Distinct().Count());
+        await DisplayAlert("規則測試完成", $"已選取 {messages.Count} 則，命中 {matches.Count} 則，未命中 {messages.Count - matches.Count} 則；已加入 {queuedItems} 筆傳送佇列。", "確定");
         _selectionMode = false; _selectToggle.Text = "☑  選取";
         await LoadAsync();
     }

@@ -70,6 +70,29 @@ public sealed class SettingsService : ISettingsService
         return await GetTargetsAsync(ids);
     }
 
+    public async Task<IReadOnlyList<RuleMatchedMessage>> GetRuleMatchedMessagesAsync(IEnumerable<SmsRecord> messages, IEnumerable<Guid> ruleGroupIds)
+    {
+        var selectedIds = ruleGroupIds.Distinct().ToHashSet();
+        if (selectedIds.Count == 0) return [];
+        var settings = await GetAsync();
+        var groups = settings.RuleGroups.Where(group => group.IsEnabled && selectedIds.Contains(group.Id)).ToList();
+        var matched = new List<(SmsRecord Message, List<Guid> TokenIds)>();
+        foreach (var message in messages)
+        {
+            var matchingGroups = groups.Where(group => MatchesGroup(group, message.Sender, message.Body)).ToList();
+            if (matchingGroups.Count == 0) continue;
+            matched.Add((message, matchingGroups.SelectMany(group => group.TargetTokenIds).Distinct().ToList()));
+        }
+        var targetByTokenId = (await GetTargetsAsync(matched.SelectMany(match => match.TokenIds))).ToDictionary(target => target.TokenId);
+        var results = new List<RuleMatchedMessage>();
+        foreach (var match in matched)
+        {
+            var targets = match.TokenIds.Where(targetByTokenId.ContainsKey).Select(tokenId => targetByTokenId[tokenId]).ToList();
+            results.Add(new RuleMatchedMessage(match.Message, targets));
+        }
+        return results;
+    }
+
     public static string NormalizePhone(string value) => new(value.Where(c => char.IsDigit(c) || c == '+').ToArray());
 
     private async Task<bool> MigrateLegacyAsync(RelaySettings settings)

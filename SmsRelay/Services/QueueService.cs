@@ -34,15 +34,21 @@ public sealed class QueueService : IQueueService
     {
         var selected = targets.GroupBy(x => x.TokenId).Select(x => x.First()).ToList();
         if (selected.Count == 0) return;
+        await EnqueueManualAsync(messages.Select(message => new ManualDelivery(message, selected)).ToList());
+    }
+
+    public async Task EnqueueManualAsync(IEnumerable<ManualDelivery> deliveries)
+    {
         await _gate.WaitAsync();
         try
         {
             var entries = await LoadUnlockedAsync();
-            foreach (var message in messages)
+            foreach (var delivery in deliveries)
             {
+                var message = delivery.Message;
                 var messageGroupId = Guid.NewGuid();
-            foreach (var target in selected)
-                entries.Add(new QueueItem { Sender = message.Sender, Body = message.Body, ReceivedAt = message.ReceivedAt, Target = target, MessageGroupId = messageGroupId, IsManualImport = true });
+                foreach (var target in delivery.Targets.GroupBy(x => x.TokenId).Select(x => x.First()))
+                    entries.Add(new QueueItem { Sender = message.Sender, Body = message.Body, ReceivedAt = message.ReceivedAt, Target = target, MessageGroupId = messageGroupId, IsManualImport = true });
             }
             await SaveUnlockedAsync(entries);
         }
