@@ -8,23 +8,39 @@ namespace SmsRelay.Pages;
 public sealed class DashboardPage : ContentPage
 {
     private readonly IQueueService _queue; private readonly ISettingsService _settings;
-    private readonly Label _permission = new(); private readonly Label _summary = new(); private readonly Button _permissionAction = Ui.IconButton("⚠", "授權 SMS 權限"); private readonly VerticalStackLayout _recent = new() { Spacing = 8 }; private readonly VerticalStackLayout _setup = new() { Spacing = 1 };
+    private readonly Label _permission = new(); private readonly Label _delivery = new(); private readonly Label _summary = new(); private readonly Button _permissionAction = Ui.IconButton("⚠", "授權必要權限"); private readonly Button _powerAction = Ui.IconButton("⚡", "允許鎖屏即時轉發"); private readonly VerticalStackLayout _recent = new() { Spacing = 8 }; private readonly VerticalStackLayout _setup = new() { Spacing = 1 };
     public DashboardPage(IQueueService queue, ISettingsService settings)
     {
-        _queue = queue; _settings = settings; Title = "狀態"; _permissionAction.Clicked += async (_, _) => await RequestSmsAsync();
+        _queue = queue; _settings = settings; Title = "狀態"; _permissionAction.Clicked += async (_, _) => await RequestSmsAsync(); _powerAction.Clicked += (_, _) => RequestBatteryOptimizationExemption();
         var clear = Ui.SmallAction("⋯"); clear.Clicked += async (_, _) => await ClearAllAsync();
         var header = new Grid { ColumnDefinitions = new ColumnDefinitionCollection { new(GridLength.Star), new(GridLength.Auto) } }; header.Add(Ui.Title("最近傳送紀錄", 20)); header.Add(clear); Grid.SetColumn(clear, 1);
-        Content = new RefreshView { Content = new ScrollView { Content = new VerticalStackLayout { Padding = new Thickness(16, 14, 16, 28), Spacing = 16, Children = { Ui.Title("SMS Relay", 28), _setup, Ui.Card(new VerticalStackLayout { Spacing = 8, Children = { _permission, _permissionAction, _summary } }), header, _recent } } } };
+        Content = new RefreshView { Content = new ScrollView { Content = new VerticalStackLayout { Padding = new Thickness(16, 14, 16, 28), Spacing = 16, Children = { Ui.Title("SMS Relay", 28), _setup, Ui.Card(new VerticalStackLayout { Spacing = 8, Children = { _permission, _permissionAction, _delivery, _powerAction, _summary } }), header, _recent } } } };
         ((RefreshView)Content).Refreshing += async (_, _) => { await RefreshAsync(); ((RefreshView)Content).IsRefreshing = false; };
         Appearing += async (_, _) => await RefreshAsync();
         TabSwipe.Attach((View)Content);
     }
-    private Task RequestSmsAsync() { Platform.CurrentActivity?.RequestPermissions([Android.Manifest.Permission.ReceiveSms, Android.Manifest.Permission.ReadSms], 101); return Task.CompletedTask; }
+    private Task RequestSmsAsync()
+    {
+        var permissions = new List<string> { Android.Manifest.Permission.ReceiveSms, Android.Manifest.Permission.ReadSms };
+        if (OperatingSystem.IsAndroidVersionAtLeast(33)) permissions.Add(Android.Manifest.Permission.PostNotifications);
+        Platform.CurrentActivity?.RequestPermissions(permissions.ToArray(), 101);
+        return Task.CompletedTask;
+    }
+    private static void RequestBatteryOptimizationExemption()
+    {
+        var context = Android.App.Application.Context;
+        var intent = new Android.Content.Intent(Android.Provider.Settings.ActionRequestIgnoreBatteryOptimizations, Android.Net.Uri.Parse($"package:{context.PackageName}"));
+        intent.AddFlags(Android.Content.ActivityFlags.NewTask);
+        context.StartActivity(intent);
+    }
     private async Task RefreshAsync()
     {
-        var context = Android.App.Application.Context; var receive = context.CheckSelfPermission(Android.Manifest.Permission.ReceiveSms) == Permission.Granted; var read = context.CheckSelfPermission(Android.Manifest.Permission.ReadSms) == Permission.Granted;
-        _permission.Text = receive && read ? "SMS 權限已授權" : "SMS 權限尚未完成"; _permission.TextColor = receive && read ? Color.FromArgb("#188038") : Color.FromArgb("#C26A00"); _permissionAction.IsVisible = !receive || !read;
-        var settings = await _settings.GetAsync(); BuildSetup(receive && read, settings);
+        var context = Android.App.Application.Context; var receive = context.CheckSelfPermission(Android.Manifest.Permission.ReceiveSms) == Permission.Granted; var read = context.CheckSelfPermission(Android.Manifest.Permission.ReadSms) == Permission.Granted; var notification = !OperatingSystem.IsAndroidVersionAtLeast(33) || context.CheckSelfPermission(Android.Manifest.Permission.PostNotifications) == Permission.Granted; var unrestricted = Platforms.Android.RelayDeliveryService.IsBatteryOptimizationIgnored();
+        var permissionsReady = receive && read && notification;
+        _permission.Text = permissionsReady ? "SMS 與通知權限已授權" : "SMS 或通知權限尚未完成"; _permission.TextColor = permissionsReady ? Color.FromArgb("#188038") : Color.FromArgb("#C26A00"); _permissionAction.IsVisible = !permissionsReady;
+        var immediateReady = unrestricted && notification;
+        _delivery.Text = immediateReady ? "鎖屏即時轉發已就緒" : "鎖屏即時轉發未就緒：仍會排程重試，但系統可能延後傳送。"; _delivery.TextColor = immediateReady ? Color.FromArgb("#188038") : Color.FromArgb("#C26A00"); _powerAction.IsVisible = !unrestricted;
+        var settings = await _settings.GetAsync(); BuildSetup(receive && read && notification && unrestricted, settings);
         var all = await _queue.GetAsync(); _summary.Text = $"待送 {all.Count(x => x.Status == DeliveryStatus.Pending)} · 失敗 {all.Count(x => x.Status == DeliveryStatus.Failed)} · 已送 {all.Count(x => x.Status == DeliveryStatus.Sent)}";
         _recent.Children.Clear();
         foreach (var group in all.GroupBy(x => x.MessageGroupId).OrderByDescending(x => x.Max(item => item.ReceivedAt)).Take(20)) _recent.Children.Add(BuildMessageRow(group.ToList()));

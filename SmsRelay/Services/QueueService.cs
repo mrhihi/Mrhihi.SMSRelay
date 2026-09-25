@@ -26,7 +26,7 @@ public sealed class QueueService : IQueueService
             await SaveUnlockedAsync(entries);
         }
         finally { _gate.Release(); }
-        Platforms.Android.AndroidJobScheduler.Schedule();
+        Platforms.Android.RelayDeliveryService.RequestDelivery();
         return true;
     }
 
@@ -53,20 +53,38 @@ public sealed class QueueService : IQueueService
             await SaveUnlockedAsync(entries);
         }
         finally { _gate.Release(); }
-        Platforms.Android.AndroidJobScheduler.Schedule();
+        Platforms.Android.RelayDeliveryService.RequestDelivery();
     }
 
     public async Task<IReadOnlyList<QueueItem>> GetAsync() { await _gate.WaitAsync(); try { return (await LoadUnlockedAsync()).OrderByDescending(x => x.ReceivedAt).ToList(); } finally { _gate.Release(); } }
-    public async Task<IReadOnlyList<QueueItem>> GetDueAsync(DateTimeOffset now) { await _gate.WaitAsync(); try { return (await LoadUnlockedAsync()).Where(x => (x.Status is DeliveryStatus.Pending or DeliveryStatus.Failed) && (x.NextAttemptAt is null || x.NextAttemptAt <= now)).ToList(); } finally { _gate.Release(); } }
+    public async Task<IReadOnlyList<QueueItem>> GetDueAsync(DateTimeOffset now)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            var entries = await LoadUnlockedAsync();
+            var expired = entries.Where(x => x.Status == DeliveryStatus.Sending && (x.SendingStartedAt is null || x.SendingStartedAt <= now.AddMinutes(-5))).ToList();
+            foreach (var item in expired)
+            {
+                item.Status = DeliveryStatus.Pending;
+                item.SendingStartedAt = null;
+                item.NextAttemptAt = now;
+                item.LastError = "上次傳送程序中斷，已重新排程。";
+            }
+            if (expired.Count != 0) await SaveUnlockedAsync(entries);
+            return entries.Where(x => (x.Status is DeliveryStatus.Pending or DeliveryStatus.Failed) && (x.NextAttemptAt is null || x.NextAttemptAt <= now)).ToList();
+        }
+        finally { _gate.Release(); }
+    }
     public async Task UpdateAsync(QueueItem item) { await _gate.WaitAsync(); try { var list = await LoadUnlockedAsync(); var index = list.FindIndex(x => x.Id == item.Id); if (index >= 0) { list[index] = item; await SaveUnlockedAsync(list); } } finally { _gate.Release(); } }
     public async Task RemoveAsync(Guid id) { await _gate.WaitAsync(); try { var list = await LoadUnlockedAsync(); list.RemoveAll(x => x.Id == id); await SaveUnlockedAsync(list); } finally { _gate.Release(); } }
     public async Task ClearAllAsync() { await _gate.WaitAsync(); try { await SaveUnlockedAsync([]); } finally { _gate.Release(); } }
     public async Task RetryAsync(Guid id)
     {
         await _gate.WaitAsync();
-        try { var list = await LoadUnlockedAsync(); var item = list.SingleOrDefault(x => x.Id == id); if (item is not null) { item.Status = DeliveryStatus.Pending; item.NextAttemptAt = null; item.LastError = null; await SaveUnlockedAsync(list); } }
+        try { var list = await LoadUnlockedAsync(); var item = list.SingleOrDefault(x => x.Id == id); if (item is not null) { item.Status = DeliveryStatus.Pending; item.NextAttemptAt = null; item.SendingStartedAt = null; item.LastError = null; await SaveUnlockedAsync(list); } }
         finally { _gate.Release(); }
-        Platforms.Android.AndroidJobScheduler.Schedule();
+        Platforms.Android.RelayDeliveryService.RequestDelivery();
     }
 
     private async Task<List<QueueItem>> LoadUnlockedAsync()

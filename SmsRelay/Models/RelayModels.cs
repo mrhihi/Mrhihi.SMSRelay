@@ -63,6 +63,9 @@ public sealed class QueueItem
     public DeliveryStatus Status { get; set; } = DeliveryStatus.Pending;
     public int AttemptCount { get; set; }
     public DateTimeOffset? NextAttemptAt { get; set; }
+    // A process can be killed after Gotify accepts a request but before the item is saved.
+    // Keep a lease so an abandoned Sending item can be retried on the next run.
+    public DateTimeOffset? SendingStartedAt { get; set; }
     public string? LastError { get; set; }
     public bool IsManualImport { get; init; }
     public string? DeduplicationKey { get; init; }

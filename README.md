@@ -15,7 +15,7 @@
 
 ## 使用方式
 
-1. 安裝 APK 後，於首頁授權讀取與接收 SMS。
+1. 安裝 APK 後，於首頁授權讀取與接收 SMS、通知，並按「允許鎖屏即時轉發」將 App 排除電池最佳化。
 2. 在「設定」新增 Gotify Server，填入 HTTPS URL 與優先權；在該 Server 下新增具名稱的 application token，並按「測試」。
 3. 新增「自動轉發規則」群組，選擇其目的地 Token；再於群組中選擇比對欄位與方式：
    - **發送者（電話／名稱）**：電話號碼會正規化後比對；文字 Sender ID 以原樣比對。
@@ -57,6 +57,8 @@ adb install publish/net.mrhihi.smsrelay-Signed.apk
 - Gotify token 使用 Android secure storage 保存；佇列內的待送 payload 與目的地快照使用 AES-GCM 加密。
 - 待送與失敗 SMS payload 使用 AES-GCM 本機加密；成功後只保留傳送狀態，不保存本文。
 - 需要 `READ_SMS` 與 `RECEIVE_SMS` 權限，適合內部側載或受管裝置。SMS 權限在部分 Android 安裝來源與發佈通路受到限制。
+- 鎖屏即時轉發需要使用者將 App 排除電池最佳化；否則簡訊仍會安全入列並在系統允許時重試。手機重開機後，首次解鎖前不會轉發。
+- 每次轉發會短暫顯示「SMS Relay 正在轉發」的前景服務通知；網路失敗會採退避重試。若程序在送出後中止，為避免遺失簡訊，最多可能重複送出一次。
 - 僅支援 Android、SMS 與 Gotify；不處理 MMS。
 
 ## 授權
